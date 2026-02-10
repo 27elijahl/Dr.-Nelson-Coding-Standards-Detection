@@ -2768,7 +2768,7 @@ public class Scanner {
     lastLine = lastLine.split("//", 2)[0];
     //System.out.println("lastLine = " + lastLine);
     yypushback(Math.min(lastLine.length() + 1, yylength() - 1));
-    if (!lastLine.matches("([} \\t\\f\\r\\n]*)|([ \t\f]*else([ \t\f].*)?)"))
+    if (!lastLine.matches("([} \\t\\f\\r\\n]*)|([ \t\f]*(else|catch)([ \t\f].*)?)"))
     {
         return new Token("Missing whitespace after brace", yyline + 1,
             true);
@@ -2873,7 +2873,7 @@ public class Scanner {
     lastLine = lastLine.split("//", 2)[0];
     //System.out.println("lastLine = " + lastLine);
     yypushback(Math.min(lastLine.length() + 1, yylength() - 1));
-    if (!lastLine.matches("([} \\t\\f\\r\\n]*)|([ \t\f]*else([ \t\f].*)?)"))
+    if (!lastLine.matches("([} \\t\\f\\r\\n]*)|([ \t\f]*(else|catch)([ \t\f].*)?)"))
     {
         return new Token("Missing whitespace after brace", yyline + 1,
             true);
