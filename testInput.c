@@ -1,960 +1,1202 @@
-/*
- * author: Samuel Tong
- * date: December 7, 2025
+/**
+ * Elijah L
+ * Created 2025-09-06
+ * Does all the math related to the arrays for activation states and
+ * weights for the n-layer network. Can run and train the network, and 
+ * this file's methods are called by main.c. 
  *
- * Optimization of the minimization of the error function for
- * an N-layer network using the Backpropagation algorithm
+ * ==================================================================
  *
- * Functionality for reading network config info,
- * randomized weight values, independently running/training
- * the network, saving/loading weight values
- *
- * Training requires feedforward run for train, which saves theta values of
- * the sum of the dot products of activation and weights, also
- * saving psi values to perform backpropagation optimization algorithm
- * to minimize the error between the output values and a given truth table
- *
- *
- * Table of Contents:
- * -------------------------------------------------------------------------
- * public void init(String[] cmdln)
- * private void config(String cmdln)
- * private void echo()
- * private void allocate()
- * private void populate()
- * private void setTestCases()
- * private void setTruthTable()
- * private void initRand()
- * private double randomNum(double randLow, double randHigh)
- * private void loadActivation(double[] tc)
- * public void train()
- * private String reportResults()
- * private void runForRun()
- * private double runForTrain(int testcase)
- * public void run()
- * public void reportRun()
- * private boolean saveWeights(String filename)
- * private boolean loadWeights(String filename)
- * private double sigmoid(double x)
- * private double dSigmoid(double x)
- * private double tanh(double x)
- * private double dtanh(double x)
- * private double activationFn(double x)
- * private double dActivationFn(double x)
- * public void execute()
- * public static void main(String[] args)
- * -------------------------------------------------------------------------
+ * run.c
+ * int printDoubleArray(double* values, int length, bool highPrecision)
+ * int allocateMemory()
+ * void propagateWeightsRandom()
+ * void propagateWeightsManual()
+ * int propagateWeightsFromFile()
+ * int propagateTestCases()
+ * int propagateTestCasesFromFile()
+ * void propagateTruthTable()
+ * int propagateTruthTableFromFile()
+ * void getInputValues()
+ * void run()
+ * double runWhilstTraining(int iteration)
+ * void updateInputActivations(int testCaseIndex)
+ * void runTestCases()
+ * void callRunTestCases()
+ * int train(double* finalError, int* totalIterations)
+ * void outputTrainingResult(bool successful, double finalError, int
+ *                                              totalIterations)
+ * int callTrain()
+ * void printTimingInformation()
+ * void printNetworkInfo()
+ * int saveWeights()
+ * void freeMemory()
  */
 
-import javax.xml.crypto.Data;
-import java.io.*;
-import java.nio.file.*;
-import java.util.*;
+#include <stdlib.h>
+#include <stdio.h>
+#include <assert.h>
+#include <stdint.h>
+#include <time.h>
+#include <math.h>
+#include <string.h>
 
-public class NLayerNetwork
+#include "../include/constants.h"
+#include "../include/run.h"
+#include "../lib/table.h"
+
+/**
+ * see documentation in main.c
+ */
+extern int activationLayers;
+
+extern int* lengths;
+
+extern int testCaseLength;
+
+extern double randomUpperBound;
+extern double randomLowerBound;
+
+extern double (*activationFunction)(double input);
+extern double (*activationFunctionPrime)(double input);
+
+extern bool training;
+extern bool runningTestCases;
+extern bool randomWeightPropagation;
+
+extern int maxIterations;
+extern double maxAcceptableError;
+extern double λ;
+extern void (*truthFunction)(double* input, double* output);
+extern bool printInputTable;
+extern bool printTruthTable;
+extern bool outputNetworkInfo;
+extern int keepAlive;
+extern int reordering;
+
+extern char loadFileName[MAX_FILE_NAME_SIZE];
+extern char saveFileName[MAX_FILE_NAME_SIZE];
+
+extern bool readTestCases;
+extern char testCasesFileName[MAX_FILE_NAME_SIZE];
+
+extern bool readTruthTable;
+extern char truthTableFileName[MAX_FILE_NAME_SIZE];
+
+extern char networkConfiguration[NETWORK_CONFIGURATION_LENGTH];
+
+/**
+ * the total number of times that propagateWeightsRandom() has been 
+ * called; this is to ensure that, if called multiple times in the
+ * same second, it returns different values.
+ */
+int randomIterations = 0;
+
+/*
+ * the array of k, j, and i activation states. Indexes for these arrays
+ * are stored as constants.
+ */
+double** a = NULL; 
+
+/**
+ * an array of weights where the second index represents the index of
+ * the left layer and the third index represents the index of the 
+ * right layer, relative such that the left array would be represented
+ * in the a array at an index equivalent to the value of the first 
+ * index.
+ */
+double*** weights = NULL;
+
+/**
+ * represents the input activation states for each of the test cases.
+ */
+double** testCases = NULL;
+
+/**
+ * represents the true result for each of the test cases.
+ */
+double** truthTable = NULL;
+
+/**
+ * represents the pointer to the beginning of allocated memory for the
+ * Θ arrays.
+ */
+double** trueΘ = NULL;
+
+/**
+ * uses a pointer offset to refer to trueΘ in a way such that the
+ * indices of a given column are equivalent to the index to reference 
+ * the corresponding column in the a 2d array. As a result, this array
+ * is effectively 1-indexed and should not be freed, nor is it
+ * allocated itself; all memory allocation should utilize the trueΘ 
+ * pointer.
+ */
+double** Θ = NULL;
+
+/**
+ * represents the pointer to the beginning of allocated memory for the
+ * Ψ arrays.
+ */
+double** trueΨ = NULL;
+
+/**
+ * represents the array of Ψ arrays for columns aside from the first
+ * column, as well as the second column, where the array is
+ * not necessary. The indices are also aligned with that of the a
+ * array, meaning that the first two elements are empty. For the last
+ * column, it actually refers to the lowercase ψ array. Similarly to
+ * the Θ array, this array includes a pointer offset to make it
+ * effectively 2-indexed in order that the indices line up with those
+ * of the a array.
+ */
+double** Ψ = NULL;
+
+/**
+ * time, in seconds, from the time the runTestCases function is called,
+ * to the time when its execution finishes.
+ */
+double runDuration = 0.0;
+
+/**
+ * time, in seconds, from the time the train function is called, to the
+ * time when its execution finishes.
+ */
+double trainDuration = 0.0;
+
+/**
+ * Neatly prints without a newline at the end a double array of the
+ * specified length.
+ * Prints 4 decimal places unless highPrecision is true, in which case
+ * it prints 17 decimal places.
+ */
+int printDoubleArray(double* values, int length, bool highPrecision)
 {
-   private int[] activationCounts;     // stores the number of nodes in each layer
-
-   private static final int INPUT = 0; // index of input layer
-   private int numActivationLayers;
-   private int outputLayerIndex;
-   private int finalHiddenLayerIndex;
-
-/*
- * network arrays
- */
-
-   private double[][] a;
-   private double[][][] weights;
-   private double[][] theta;
-   private double[][] psi;
-
-   private int numTestCases;        // number of test cases
-   private double[][] testCases;    // test cases to fill activation layer
-   private double[][] truthTable;   // truth values for each test case
-
-   private double runResult[][];    // results of only running
-
-   private double randLow;          // RNG lower bound
-   private double randHigh;         // RNG upper bound
-   private int maxIterations;       // max iterations for training
-   private double errorThreshold;   // max acceptable average error
-   private double lambda;           // learning factor
-   private int keepAlive;        // iterations between messages
-
-   private boolean training;        // training mode
-   private boolean running;         // running mode
-   private boolean loading;         // loading weights
-   private boolean saving;          // saving weights
-
-   private String fileIn;           // input file name
-   private String fileOut;          // output file name
-   private String fileTestCase;     // test cases file name
-   private String fileTruthTable;   // truthtable file name
-   private String fileConfig;       // name of the config file
-   private boolean fileBinary;      // using binary testcase files
-   private boolean printTestCases;  // print testcases when reporting results
-
-   private int iteration;           // iterations needed for training
-   private double averageError;     // average error of the network
-
-   private double trainTime;        // time to train the network (ms)
-   private double runTime;          // time to run the network (nms)
-
-   private static final double NANO_TO_MILLI = 1000000.0; // convert nano -> millisecond
-   private static final int CONFIG_ARGUMENT_INDEX = 0; // access config in "javac ABC...java config.txt"
-
-/**
- * initializes all configurable parameters
- * @param cmdln command line execution string
- * @postcondition configured settings, echoed settings, allocate arrays
- *                populate test cases, truth table, weight values
- */
-   public void init(String[] cmdln)
+   if (length == 0)
    {
-      config(cmdln[CONFIG_ARGUMENT_INDEX]);
-      echo();
-      allocate();
-      populate();
+      printf("[]");
    }
-
-/**
- * sets configurable values
- * @param cmdln config file path
- * @postcondition config values initialized to user specified values
- */
-   private void config(String cmdln)
+   else
    {
-      Path p = Paths.get(cmdln);
-      String line;
-      String[] parse;
-      Map<String, String> read = new LinkedHashMap<String, String>();
-
-      this.fileConfig = cmdln;
-
-      try (BufferedReader br = Files.newBufferedReader(p))
+      if (highPrecision)
       {
-         while ((line = br.readLine()) != null)
-         {
-            parse = line.split(",");
-            if (parse.length == 2)
-            {
-               read.put(parse[0], parse[1]);
-            }
-         } // while ((line = br.readLine()) != null)
-
-         try
-         {
-            String[] network = read.get("layer").split("-");
-
-            this.numActivationLayers = network.length;
-            this.outputLayerIndex = this.numActivationLayers - 1;
-            this.finalHiddenLayerIndex = this.outputLayerIndex - 1;
-
-            this.activationCounts = new int[numActivationLayers];
-
-            for (int layer = 0; layer < numActivationLayers; layer++)
-            {
-               this.activationCounts[layer] = Integer.parseInt(network[layer]);
-            }
-
-            this.numTestCases = Integer.parseInt(read.get("num_test_cases"));
-            this.running = read.get("is_running").equals("y");
-            this.saving = read.get("is_saving").equals("y");
-            this.loading = read.get("is_loading").equals("y");
-            this.fileBinary = read.get("binarytc").equals("y");
-            this.printTestCases = read.get("printtc").equals("y");
-
-            if (saving)
-            {
-               this.fileOut = read.get("weights_out_file");
-            }
-
-            if (loading)
-            {
-               this.fileIn = read.get("weights_in_file");
-            }
-
-            this.fileTestCase = read.get("testcase_file");
-            this.training = read.get("is_training").equals("y");
-
-            if (training)
-            {
-               this.randLow = Double.parseDouble(read.get("random_lower_bound"));
-               this.randHigh = Double.parseDouble(read.get("random_upper_bound"));
-               this.maxIterations = Integer.parseInt(read.get("max_iterations"));
-               this.errorThreshold = Double.parseDouble(read.get("error_threshold"));
-               this.lambda = Double.parseDouble(read.get("lambda"));
-
-               this.fileTruthTable = read.get("truthtable_file");
-
-               this.keepAlive = Integer.parseInt(read.get("keepalive"));
-            } // if (training)
-         } // try
-         catch (Exception e)
-         {
-            System.err.printf("exception in file reading: %s", e.getMessage());
-         }
-      } // try (BufferedReader br = Files.newBufferedReader(p))
-      catch (IOException ioe)
-      {
-         System.err.printf("CONFIG reading file exception: error: %s", ioe.getMessage());
-      }
-   } // private void config(String cmdln)
-
-/**
- * prints values of all configurable values
- */
-   private void echo()
-   {
-      System.out.println("------------------------------");
-      System.out.println("CONFIG ECHO\n");
-      System.out.printf("READING CONFIG FROM: %s\n", fileConfig);
-
-      for (int layer = 0; layer < numActivationLayers; layer++)
-      {
-         System.out.printf("%d-", activationCounts[layer]);
-      }
-      System.out.println("network\n");
-
-      System.out.printf("using random weights = %s\n", !loading);
-      System.out.printf("training true/false = %b\n", training);
-      System.out.printf("running true/false = %b\n", running);
-
-      if (training)
-      {
-         System.out.printf("rand range: [%.2f, %.2f]\n", randLow, randHigh);
-         System.out.printf("max iterations = %d\n", maxIterations);
-         System.out.printf("error threshold = %.5f\n", errorThreshold);
-         System.out.printf("lambda = %.2f\n", lambda);
-         System.out.printf("getting truth table from: %s\n", fileTruthTable);
-         System.out.printf("keep alive (iterations between messages) = %d\n", this.keepAlive);
-      } // if (training)
-
-      System.out.printf("getting %d test cases from %s\n", numTestCases, fileTestCase);
-      System.out.printf("using binary test case file: %b\n", fileBinary);
-
-      if (loading)
-      {
-         System.out.printf("loading weights from: %s\n", fileIn);
-      }
-
-      if (saving)
-      {
-         System.out.printf("saving weights into %s\n", fileOut);
-      }
-
-      System.out.println("------------------------------");
-   } // private void echo()
-
-/**
- * allocates memory for network arrays
- * @precondition positive/non zero array lengths
- * @postcondition array memory allocated
- */
-   private void allocate()
-   {
-/*
- * initialize all the activation layers
- */
-      a = new double[numActivationLayers][];
-      for (int layer = 0; layer < numActivationLayers; layer++)
-      {
-         a[layer] = new double[activationCounts[layer]];
-      }
-/*
- * initialize the arrays that hold the weights
- * that connect previous activation layer to the next
- */
-      weights = new double[numActivationLayers - 1][][];
-      for (int layer = 0; layer < numActivationLayers - 1; layer++)
-      {
-         weights[layer] = new double[activationCounts[layer]][activationCounts[layer+1]];
-      }
-
-/*
- * initialize the testcase array
- * that fills the first activation layer (input layer)
- */
-      int n1 = INPUT;
-      testCases = new double[numTestCases][activationCounts[n1]];
-
-/*
- * initialize the arrays for training
- * theta arrays for the second and third network arrays (starting from array index 1)
- * psi arrays for the third and fourth network arrays (starting from array index 2)
- * truth table array that holds the true value of each testcase
- */
-      if (training)
-      {
-         theta = new double[numActivationLayers - 1][];
-         for (int layer = 1; layer < numActivationLayers - 1; layer++)
-         {
-            theta[layer] = new double[activationCounts[layer]];
-         }
-
-         psi = new double[numActivationLayers][];
-         for (int layer = 2; layer < numActivationLayers; layer++)
-         {
-            psi[layer] = new double[activationCounts[layer]];
-         }
-
-         int n2 = outputLayerIndex;
-         truthTable = new double[numTestCases][activationCounts[n2]];
-      } // if (training)
-
-      if (running)
-      {
-         int n3 = outputLayerIndex;
-         runResult = new double[numTestCases][activationCounts[n3]];
-      }
-
-   } // private void allocate()
-
-/**
- * sets test cases, truth table, weights to numerical values
- * @precondition memory allocated for arrays
- * @postconditions values set
- */
-   private void populate()
-   {
-      if (fileBinary)
-      {
-         setBinaryTestCases();
+         printf("[%0.17f", values[0]);
       }
       else
       {
-         setTestCases();
+         printf("[%0.4f", values[0]);
       }
 
-      if (training)
+      for (int it = 1; it < length; it++)
       {
-         setTruthTable();
+         if (highPrecision)
+         {
+            printf(", %0.17f", values[it]);
+         }
+         else
+         {
+            printf(", %0.4f", values[it]);
+         }
       }
+      printf("]");
+   } // else [if (length == 0)]
+   return 0;
+} // int printDoubleArray (double* values, int length)
 
-      if (!loading)
+
+/**
+ * Allocates the arrays for weights (kjWeights and jiWeights), as well
+ * as the a, h, and F arrays, and arrays necessary for training, if
+ * training.
+ */
+int allocateMemory()
+{
+   int returnValue = 0;
+   int n;
+
+   a = (double**)calloc(activationLayers, sizeof(double*));
+
+   if (a == NULL)
+   {
+      returnValue = -1;
+   }
+   else
+   {
+      for (int n = 0; n < activationLayers; n++)
       {
-         initRand();
+         a[n] = (double*)calloc(lengths[n], sizeof(double));
+         if (a[n] == NULL) returnValue = -1;
+      }
+   } // else [if (a == NULL)]
+
+   weights = (double***)malloc(NUM_LAYER_INTERVALS * 
+         sizeof(double**));
+
+   if (weights == NULL)
+   {
+      returnValue = -1;
+   }
+   else
+   {
+      for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
+      {
+         weights[n] = (double**)malloc(lengths[n] * sizeof(double*));
+
+         if (weights[n] == NULL)
+         {
+            returnValue = -1;
+         }
+         else
+         {
+            for (int k = 0; k < lengths[n]; k++)
+            {
+               weights[n][k] = (double*)malloc(lengths[n + 1] *  sizeof(double));
+            }
+         }
+      } // for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
+   } // else [if (weights == NULL)]
+
+   testCases = (double**)malloc(testCaseLength * sizeof(double*));
+
+   if (testCases == NULL) 
+   {
+      returnValue = -1;
+   }
+   else
+   {
+      for (int it = 0; it < testCaseLength; it++)
+      {
+         testCases[it] = (double*)malloc(lengths[INPUT_LAYER_INDEX] * sizeof(double));
+         if (testCases[it] == NULL) returnValue = -1;
+      }
+   }
+
+   if (training | printTruthTable)
+   {
+      truthTable = (double**)malloc(testCaseLength * sizeof(double));
+
+      if (truthTable == NULL)
+      {
+         returnValue = -1;
       }
       else
       {
-         System.out.println("Loading weights");
-      }
-   } // private void populate()
-
-/**
- * reads configuration file and initializes the test cases
- * of this network, values to fill the activation nodes with
- *
- * @precondition memory allocated for arrays
- * @postconditions values set
- */
-   private void setTestCases()
-   {
-      Path p = Paths.get(this.fileTestCase);
-      String line;
-      String[] parse;
-
-      try (BufferedReader br = Files.newBufferedReader(p))
-      {
-         for (int tc = 0; tc < numTestCases; tc++)
+         for (int it = 0; it < testCaseLength; it++)
          {
-            line = br.readLine();
-            parse = line.split(",");
-
-            int n = INPUT;
-
-            for (int m = 0; m < activationCounts[n]; m++)
-            {
-               testCases[tc][m] = Double.parseDouble(parse[m]);
-            }
-         } // for (tc = 0; tc < numTestCases; tc++)
-      } // try (BufferedReader br = Files.newBufferedReader(p))
-      catch (Exception e)
-      {
-         System.err.printf("SETTEST reading file exception: %s", e.getMessage());
+            truthTable[it] = (double*)malloc(lengths[OUTPUT_LAYER_INDEX] * sizeof(double));
+            if (truthTable[it] == NULL) returnValue = -1;
+         }
       }
-   } // private void setTestCases()
-
-   private void setBinaryTestCases()
+   } // if (training | printTruthTable)
+   
+   if (training)
    {
-      File f = new File(this.fileTestCase);
-
-      try (DataInputStream dis = new DataInputStream(new FileInputStream(f)))
+      trueΘ = (double**)malloc(NUM_THETA_LAYERS * sizeof(double*));
+      if (trueΘ == NULL)
       {
-         for (int tc = 0; tc < numTestCases; tc++)
-         {
-            int n = INPUT;
-
-            for (int m = 0; m < activationCounts[n]; m++)
-            {
-               testCases[tc][m] = dis.readDouble();
-            }
-         } // for (int tc = 0; tc < numTestCases; tc++)
-      } // try (DataInputStream dis = new DataInputStream(new FileInputStream(f)))
-      catch (Exception e)
-      {
-         System.err.printf("SETBINARY reading file exception: %s", e.getMessage());
+         returnValue = -1;
       }
-   } // private void setBinaryTestCases()
-
-/**
- * sets the truth table for the network to numerical values
- *
- * @precondition memory allocated for arrays, is training
- * @postconditions values set
- */
-   private void setTruthTable()
-   {
-      Path p = Paths.get(this.fileTruthTable);
-
-      try (BufferedReader br = Files.newBufferedReader(p))
+      else
       {
-         int n = numActivationLayers - 1;
-         for (int i = 0; i < activationCounts[n]; i++)
+         Θ = trueΘ - 1;
+
+         for (int n = INITIAL_THETA_INDEX; n < THETA_ARRAY_LIMIT; n++)
          {
-            String line = br.readLine();
-            String[] parse = line.split(",");
-
-            for (int tc = 0; tc < numTestCases; tc++)
-            {
-               truthTable[tc][i] = Double.parseDouble(parse[tc]);
-            }
-         } // for (int i = 0; i < activationCounts[n]; i++)
-      } // try (BufferedReader br = Files.newBufferedReader(p))
-      catch (Exception e)
-      {
-         System.err.printf("setting truth table exception: %s\n", e.getMessage());
-         e.printStackTrace();
+            Θ[n] = (double*)malloc(lengths[n] * sizeof(double));
+            if (Θ[n] == NULL) returnValue = -1;
+         }
       }
-   } // private void setTruthTable()
 
-/**
- * fills weights with random numbers in user defined bounds
- * @precondition memory allocated for arrays
- * @postcondition values set
- */
-   private void initRand()
-   {
-      for (int n = 0; n < numActivationLayers - 1; n++)
+      trueΨ = (double**)malloc(NUM_PSI_LAYERS * sizeof(double*));
+      if (trueΨ == NULL)
       {
-         for (int k = 0; k < activationCounts[n]; k++)
-         {
-            for (int j = 0; j < activationCounts[n+1]; j++)
-            {
-               weights[n][k][j] = randomNum(randLow, randHigh);
-            } // for (int j = 0; j < activationCounts[n+1]; j++)
-         } // for (int k = 0; k < activationCounts[n]; k++)
-      } // for (int n = 0; n < numActivationLayers; n++)
-   } // private void initRand()
+         returnValue = -1;
+      }
+      else
+      {
+         Ψ = trueΨ - 2;
 
-/**
- * generates a random number in given bounds
- * @param randLow lower bound
- * @param randHigh upper bound
- * @return random double in [randLow, randHigh]
- */
-   private double randomNum(double randLow, double randHigh)
+         for (int n = INITIAL_PSI_INDEX; n < PSI_ARRAY_LIMIT; n++)
+         {
+            Ψ[n] = (double*)malloc(lengths[n] * sizeof(double));
+            if (Ψ[n] == NULL) returnValue = -1;
+         }
+      }
+   } // if (training)
+
+   if (returnValue == -1)
    {
-      return randLow + (randHigh - randLow) * Math.random();
+      printf(ERROR("Some memory could not be initialized"));
    }
+   
+   return returnValue;
+} // int allocateMemory()
 
 /**
- * fills the activation layer with a test case
- * @param tc test case values
- * @precondition memory allocated for activation layer
- * @postcondition values loaded
+ * Puts the values of the weights to random, specified by the 
+ * randomUpperBound and randomLowerBound user-configurable variables.
  */
-   private void loadActivation(double[] tc)
+void propagateWeightsRandom()
+{
+   srand(time(NULL) + randomIterations);
+
+   for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
    {
-      int n = INPUT;
-      for (int m = 0; m < activationCounts[n]; m++)
+      for (int k = 0; k < lengths[n]; k++)
       {
-         a[n][m] = tc[m];
+         for (int j = 0; j < lengths[n + 1]; j++)
+         {
+            weights[n][k][j] = 
+               RAND(randomUpperBound, randomLowerBound);
+         }
       }
    }
 
+   randomIterations++;
+   return;
+} // void propagateWeightsRandom()
+
 /**
- * trains the network by changing weights to minimize the
- * error of the neural network across all test cases
- * computes the change in each weight to perform an optimized
- * gradient descent to minimize the error
- * @precondition all configs set, initialized, memory allocated,
- *               arrays filled, is in training mode
- * @postcondition weights changed to values that minimize the error
- *                below a threshold or max iterations reached
+ * Puts the values of the weights manually, based on user input.
  */
-   public void train()
+void propagateWeightsManual()
+{
+   weights[INPUT_LAYER_INDEX][0][0] = 0.5;
+   weights[INPUT_LAYER_INDEX][0][1] = 0.5;
+   weights[INPUT_LAYER_INDEX][1][0] = 0.5;
+   weights[INPUT_LAYER_INDEX][1][1] = 0.5;
+
+   return;
+} // void propagateWeightsManual()
+
+/**
+ * Puts the values of the weights based on data from the file whose name
+ * is specified in the loadFileName variable. Ensures that the input
+ * file has the same network configuration as this one.
+ */
+int propagateWeightsFromFile()
+{
+   int returnValue = 0;
+
+   FILE* file = fopen(loadFileName, "rb");
+
+   if (file == NULL)
    {
-      int iteration = 0;
-      double averageError = Double.MAX_VALUE;
-
-      while (iteration < maxIterations && averageError > errorThreshold)
+      printf(ERROR("Could not open file with name \"%s\"."), 
+            loadFileName);
+      returnValue = -1;
+   }
+   else
+   {
+      while(fgetc(file) != '\n');
+      
+      for (int n = 0; n < activationLayers; n++)
       {
-         double iterationError = 0.0;
-
-         for (int tc = 0; tc < numTestCases; tc++)
+         int fileKLength;
+         fread(&fileKLength, sizeof(int), 1, file);
+         fseek(file, 1, SEEK_CUR); // moves one byte forward
+         
+         if (fileKLength != lengths[n])
          {
-            loadActivation(testCases[tc]);
-            iterationError += runForTrain(tc);
-/*
- * index of first hidden layer is the index of the input layer plus 1
- */
-            for (int n = finalHiddenLayerIndex; n > INPUT + 1; n--)
-            {
-               for (int j = 0; j < activationCounts[n]; j++)
-               {
-                  double omegaj = 0.0;
-                  for (int i = 0; i < activationCounts[n+1]; i++)
-                  {
-                     omegaj += psi[n+1][i] * weights[n][j][i];
-                     weights[n][j][i] += (lambda * a[n][j] * psi[n+1][i]);
-                  }
-                  psi[n][j] = omegaj * dActivationFn(theta[n][j]);
-               } // for (int j = 0; j < activationCounts[n]; j++)
-            } // for (int n = OUT - 1; n > INPUT + 1; n--)
+            printf(ERROR("Input Weights File has an incompatable network"
+                     " configuration (%d as %dth element incompatable with %s)"),
+                  fileKLength, n, networkConfiguration);
+            returnValue = -1;
+         }
+      } // for (int n = 0; n < activationLayers; n++)
 
-            int n = INPUT + 1;
-            for (int k = 0; k < activationCounts[n]; k++)
+      for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
+      {
+         for (int k = 0; k < lengths[n]; k++)
+         {
+            if (fread(weights[n][k], sizeof(double), lengths[n + 1], file) < lengths[n + 1])
             {
-               double omegak = 0.0;
-               for (int J = 0; J < activationCounts[n+1]; J++)
+               printf(ERROR("Could not read %dth %d-%d weight fully"),
+                     k, n, n + 1);
+               returnValue = -1;
+            }
+
+            fseek(file, 1, SEEK_CUR);
+         }
+      } // for (int n = 0; n < activationLayers - 1; n++)
+
+      fclose(file);
+   } // else [if (file == NULL)]
+
+   return returnValue;
+} // int propagateWeightsFromFile()
+
+/**
+ * Sets the values of the test cases to testing every combination
+ * of 0s and 1s for each of the activation states. Only works if
+ * testCaseLength is 4 (requiring kLength >= 2) or 8 (requiring
+ * kLength >= 3).
+ */
+int propagateTestCases()
+{
+   int returnValue = 0;
+
+   if (testCaseLength == 4)
+   {
+      testCases[0][0] = 0.0;
+      testCases[0][1] = 0.0;
+      testCases[1][0] = 0.0;
+      testCases[1][1] = 1.0;
+      testCases[2][0] = 1.0;
+      testCases[2][1] = 0.0;
+      testCases[3][0] = 1.0;
+      testCases[3][1] = 1.0;
+   } 
+   else if (testCaseLength == 8)
+   {
+      testCases[0][0] = 0.0;
+      testCases[0][1] = 0.0;
+      testCases[0][2] = 0.0;
+      testCases[1][0] = 0.0;
+      testCases[1][1] = 0.0;
+      testCases[1][2] = 1.0;
+      testCases[2][0] = 0.0;
+      testCases[2][1] = 1.0;
+      testCases[2][2] = 0.0;
+      testCases[3][0] = 0.0;
+      testCases[3][1] = 1.0;
+      testCases[3][2] = 1.0;
+
+      testCases[4][0] = 1.0;
+      testCases[4][1] = 0.0;
+      testCases[4][2] = 0.0;
+      testCases[5][0] = 1.0;
+      testCases[5][1] = 0.0;
+      testCases[5][2] = 1.0;
+      testCases[6][0] = 1.0;
+      testCases[6][1] = 1.0;
+      testCases[6][2] = 0.0;
+      testCases[7][0] = 1.0;
+      testCases[7][1] = 1.0;
+      testCases[7][2] = 1.0;
+   } // else if (testCaseLength == 8) [if (testCaseLength == 4)]
+   else
+   {
+      printf(ERROR("No preset test cases for length %d."), testCaseLength);
+      returnValue = -1;
+   }
+
+   return returnValue;
+} // int propagateTestCases()
+
+
+int propagateTestCasesFromFile()
+{
+   int returnValue = 0;
+
+   FILE* file = fopen(testCasesFileName, "rb");
+
+   if (file == NULL)
+   {
+      printf(ERROR("Could not open test case file."));
+      returnValue = -1;
+   }
+   else
+   {
+      int fileInputLength = 0;
+      fread(&fileInputLength, sizeof(int), 1, file);
+
+      int fileTestCaseLength = 0;
+      fread(&fileTestCaseLength, sizeof(int), 1, file);
+
+      if (fileInputLength != lengths[INPUT_LAYER_INDEX])
+      {
+         printf(ERROR("Input Test Cases File has an incompatable"
+               " network configuration (inputLength %d != %d)."),
+               fileInputLength, 
+               lengths[INPUT_LAYER_INDEX]);
+         returnValue = -1;
+      }
+
+      if (fileTestCaseLength != testCaseLength)
+      {
+         printf(ERROR("Input Test Cases File has an incompatable"
+               " network configuration (testCaseLength %d != %d)."),
+               fileTestCaseLength,
+               testCaseLength);
+         returnValue = -1;
+      }
+
+      for (int it = 0; it < testCaseLength; it++)
+      {
+         if (fread(testCases[it], sizeof(double), 
+                  lengths[INPUT_LAYER_INDEX], file) 
+                  < lengths[INPUT_LAYER_INDEX])
+         {
+            printf(ERROR("Could not successfully fully read %dth "
+                   "test case from the file."), it);
+            returnValue = -1;
+         }
+      }
+   } // else [if (file == NULL)]
+   
+   return returnValue;
+} // propagateTestCasesFromFile
+
+/**
+ * Sets the values of the truth table using the function pointer
+ * truthFunction.
+ */
+void propagateTruthTable()
+{
+   for (int it = 0; it < testCaseLength; it++)
+   {
+      truthFunction(testCases[it], truthTable[it]);
+   }
+   return;
+}
+
+/**
+ * Sets the value of the truth table using the binary file whose name
+ * is specified by truthTableFileName.
+ */
+int propagateTruthTableFromFile()
+{
+   int returnValue = 0;
+
+   FILE* file = fopen(truthTableFileName, "rb");
+
+   if (file == NULL)
+   {
+      printf(ERROR("Could not open truth table file."));
+      returnValue = -1;
+   }
+   else
+   {
+      int fileOutputLength = 0;
+      fread(&fileOutputLength, sizeof(int), 1, file);
+
+      int fileTestCaseLength = 0;
+      fread(&fileTestCaseLength, sizeof(int), 1, file);
+
+      if (fileOutputLength != lengths[OUTPUT_LAYER_INDEX])
+      {
+         printf(ERROR("Input Truth Table File has an incompatable"
+               " network configuration (outputLength %d != %d)."),
+               fileOutputLength, 
+               lengths[OUTPUT_LAYER_INDEX]);
+         returnValue = -1;
+      }
+
+      if (fileTestCaseLength != testCaseLength)
+      {
+         printf(ERROR("Input Test Cases File has an incompatable"
+               " test case length (testCaseLength %d != %d)."),
+               fileTestCaseLength,
+               testCaseLength);
+         returnValue = -1;
+      }
+
+      for (int it = 0; it < testCaseLength; it++)
+      {
+         if (fread(truthTable[it], sizeof(double), 
+                  lengths[OUTPUT_LAYER_INDEX], file) 
+                  < lengths[OUTPUT_LAYER_INDEX])
+         {
+            printf(ERROR("Could not successfully fully read %dth "
+                   "test case from the file."), it);
+            returnValue = -1;
+         }
+      }
+   } // else [if (file == NULL)]
+   fclose(file);
+   return returnValue;
+} // int propagateTruthTableFromFile()
+
+/**
+ * fills in the a array with user specified input values;
+ * this is called by the run function to test a specific set of input.
+ */
+void getInputValues()
+{
+   a[INPUT_LAYER_INDEX][0] = 0.0;
+   a[INPUT_LAYER_INDEX][1] = 1.0;
+   return;
+}
+
+/**
+ * Runs the network using the kjWeights and jiWeights defining the h
+ * array and f as the final result, using the specified
+ * activationFunction.
+ */
+void run()
+{
+   for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
+   {
+      for (int j = 0; j < lengths[n + 1]; j++)
+      {
+         double Θ = 0.0;
+         for (int k = 0; k < lengths[n]; k++)
+         {
+            Θ += a[n][k] * weights[n][k][j];
+         }
+         a[n + 1][j] = activationFunction(Θ);
+      }
+   }
+   
+   return;
+} // void run()
+
+/**
+ * Same as run(), but updates the Θ array
+ * because of the necessities of training
+ *
+ * Returns the error calculated for this iteration.
+ */
+double runWhilstTraining(int iteration)
+{
+   double ESum = 0.0;
+   int n;
+   double Θj;
+   double ω;
+
+   for (n = 0; n < NUM_LAYER_INTERVALS_EXEMPTING_THE_LAST; n++)
+   {
+      for (int j = 0; j < lengths[n + 1]; j++)
+      {
+         Θj = 0.0;
+         for (int k = 0; k < lengths[n]; k++)
+         {
+            Θj += a[n][k] * weights[n][k][j];
+         }
+
+         Θ[n + 1][j] = Θj;
+         a[n + 1][j] = activationFunction(Θj);
+      }
+   } // for (n = 0; n < activationLayers - 2; n++)
+
+   n = OUTPUT_LAYER_INDEX - 1;
+
+   for (int j = 0; j < lengths[n + 1]; j++)
+   {
+      Θj = 0.0;
+      for (int k = 0; k < lengths[n]; k++)
+      {
+         Θj += a[n][k] * weights[n][k][j];
+      }
+
+      a[n + 1][j] = activationFunction(Θj);
+      ω = truthTable[iteration][j] - a[n + 1][j];
+      Ψ[n + 1][j] = ω * activationFunctionPrime(Θj);
+
+      ESum += ω * ω;
+   } // for (int i = 0; i < iLength; i++)
+   return ESum / 2.0;
+} // void runWhilstTraining()
+
+/**
+ * Sets the values of the input activation states to those specified
+ * in the testCases array at the input index.
+ */
+void updateInputActivations(int testCaseIndex)
+{
+   for (int k = 0; k < lengths[INPUT_LAYER_INDEX]; k++)
+   {
+      a[INPUT_LAYER_INDEX][k] = testCases[testCaseIndex][k];
+   }
+   return;
+}
+
+
+/**
+ * Gets the output value from the network for each of the possible
+ * test cases, creating a chart. Has the option of printing the input
+ * of each test case, as well as the value according to the truth table.
+ */
+void runTestCases()
+{
+   int outputLayerLength = lengths[OUTPUT_LAYER_INDEX];
+
+   Table outputs = bareInitializeTable(outputLayerLength);
+
+   zeroHeaders(outputs);
+
+   outputs.headers[0] = "Output";
+
+   setAllColumnTypes(outputs, float_2x2);
+
+   groupAllColumns(outputs);
+
+   updateWidths(outputs);
+
+
+   Table finalTable = outputs;
+
+   if (printInputTable)
+   {
+      int inputLayerLength = lengths[0];
+      Table inputs = bareInitializeTable(inputLayerLength);
+
+      zeroHeaders(inputs);
+      inputs.headers[0] = "Inputs";
+
+
+      setAllColumnTypes(inputs, float_2x4);
+
+      groupAllColumns(inputs);
+
+      updateWidths(inputs);
+
+      finalTable = appendTables(inputs, finalTable, DONE_TABLE);
+   } // if (printInputTable)
+
+   
+   if (printTruthTable)
+   {
+      int outputLayerLength = lengths[OUTPUT_LAYER_INDEX];
+      Table truths = bareInitializeTable(outputLayerLength);
+      
+      zeroHeaders(truths);
+      truths.headers[0] = "Truth";
+
+      setAllColumnTypes(truths, float_2x2);
+
+      groupAllColumns(truths);
+
+      updateWidths(truths);
+
+      finalTable = appendTables(finalTable, truths, DONE_TABLE);
+   } // if (printTruthTable)
+   
+   Table indices = defineTable(DEFAULT_CONFIGS, 1, 0, "", int16);
+   
+   finalTable = appendTables(indices, finalTable, DONE_TABLE);
+
+
+   printHeader(finalTable);
+
+   int trueIteration;
+   for (int it = 0; it < testCaseLength; it++)
+   {
+      trueIteration = it;
+
+      if (reordering != 0)
+      {
+         trueIteration = reordering * (it % reordering) + it / reordering;
+      }
+
+
+      updateInputActivations(trueIteration);
+      run();
+
+      printEntry(finalTable, trueIteration);
+
+      if (printInputTable)
+      {
+         for (int k = 0; k < lengths[INPUT_LAYER_INDEX]; k++)
+         {
+            printEntry(finalTable, a[INPUT_LAYER_INDEX][k]);
+         }
+      }
+
+      for (int k = 0; k < lengths[OUTPUT_LAYER_INDEX]; k++)
+      {
+         printEntry(finalTable, a[OUTPUT_LAYER_INDEX][k]);
+      }
+
+      if (printTruthTable)
+      {
+         for (int k = 0; k < lengths[OUTPUT_LAYER_INDEX]; k++)
+         {
+            printEntry(finalTable, truthTable[trueIteration][k]);
+         }
+      }
+   } // for (int it = 0; it < testCaseLength; it++)
+
+   freeTable(finalTable);
+
+   return;
+} // void runTestCases()
+
+/**
+ * Calls the runTestCases function, setting up the timing functionality
+ * and saving it to the variable runDuration.
+ */
+void callRunTestCases()
+{
+   double initialTime = clock();
+
+   runTestCases();
+   
+   runDuration = 
+      (clock() - initialTime) / NUMBER_OF_MILLISECONDS_IN_A_SECOND;
+   
+   return;
+} // void callRunTestCases()
+
+/**
+ * Runs a training algorithm of gradient descent, with optional logging
+ * features.
+ * It runs until a max number of iterations, iterating through every
+ * binary input combination. If the error, averaged through the test
+ * cases, is less than the specified maxAcceptableError, then the
+ * network finishes successfully; if it doesn't before running the
+ * max number of iterations, it finishes unsuccessfully
+ *
+ * This function returns 1 if training fails, 0 if training succeeds,
+ * and -1 if training could not finish because of some error.
+ */
+int train(double* finalError, int* totalIterations)
+{
+   int returnValue = 0;
+
+   int iterationsCount = 0;
+
+   double EAverage = 0.0;
+   double ESum = 0.0;
+
+   int n;
+
+   double Ω;
+   double Ψk;
+
+   Table table;
+
+   if (keepAlive != 0)
+   {
+      table = defineTable(DEFAULT_CONFIGS, 2, 0, "Iterations", int32, "Error", float_4x8);
+      printHeader(table);
+   }
+
+   while (iterationsCount <= maxIterations && 
+         (iterationsCount == 0 || EAverage > maxAcceptableError))
+   {
+      iterationsCount++;
+
+      for (int it = 0; it < testCaseLength; it++)
+      {
+         updateInputActivations(it);
+
+         ESum += runWhilstTraining(it);
+
+
+         for (n = PENULTIMATE_LAYER; n >= 2; n--)
+         {
+            for (int k = 0; k < lengths[n]; k++)
+            {
+               Ω = 0.0;
+               for (int j = 0; j < lengths[n + 1]; j++)
                {
-                  omegak += psi[n+1][J] * weights[n][k][J];
-                  weights[n][k][J] += (lambda * a[n][k] * psi[n+1][J]);
+                  Ω += Ψ[n + 1][j] * weights[n][k][j];
+                  weights[n][k][j] += λ * a[n][k] * Ψ[n + 1][j];
                }
 
-               double psik = omegak * dActivationFn(theta[n][k]);
+               Ψ[n][k] = Ω * activationFunctionPrime(Θ[n][k]);
+            }
+         } // for (n = activationLayers - 2; n >= 2; n--)
 
-               int n1 = INPUT;
-               for (int m = 0; m < activationCounts[n1]; m++)
-               {
-                  weights[n1][m][k] += (lambda * a[n1][m] * psik);
-               }
-            } // for (int k = 0; k < activationCounts[n]; k++)
-         } // for (int tc = 0; tc < numTestCases; tc++)
-
-         iterationError /= 2.0;
-         averageError = iterationError / (double) (numTestCases);
-         iteration++;
-
-         if ((keepAlive != 0) && ((iteration % keepAlive) == 0))
+         n = 1;
+         for (int k = 0; k < lengths[n]; k++)
          {
-            System.out.printf("Iteration %d, Error = %f\n", iteration, averageError);
-         }
-      } // while (iteration <= maxIterations && averageError > errorThreshold)
+            Ω = 0.0;
+            for (int j = 0; j < lengths[n + 1]; j++)
+            {
+               Ω += Ψ[n + 1][j] * weights[n][k][j];
 
-      this.iteration = iteration;
-      this.averageError = averageError;
-   } // public void train()
+               weights[n][k][j] += λ * a[n][k] * Ψ[n + 1][j];
+            }
+            
+            Ψk = Ω * activationFunctionPrime(Θ[n][k]);
+
+            for (int m = 0; m < lengths[n - 1]; m++)
+            {
+               weights[INPUT_LAYER_INDEX][m][k] += 
+                  λ * a[INPUT_LAYER_INDEX][m] * Ψk;
+            }
+         } // for (int k = 0; k < kLength; k++)
+      } // for (int it = 0; it < testCaseLength; it++)
+
+      EAverage = ESum / (double)testCaseLength;
+      ESum = 0.0;
+
+      if ((keepAlive != 0) && (iterationsCount % keepAlive == 0))
+      {
+         printRow(table, iterationsCount, EAverage);
+      }
+
+   } // while (iterationsCount <= maxIterations && ...
+
+   if (keepAlive != 0) freeTable(table);
+
+   if (EAverage > maxAcceptableError)
+   {
+      returnValue = 1;
+   }
+
+   *finalError = EAverage;
+   *totalIterations = iterationsCount;
+
+
+   return returnValue;
+} // int train(double* finalError, int* totalIterations)
+
+
 
 /**
- * reports the result of training
- * @precondition train() has been run
- * @return reason for stopping, how many iterations trained,
- *         average error of the network after training
+ * Prints information about the success of the training and information
+ * pertaining to the reason why training failed, if it failed.
  */
-   private String reportResults()
-   {
-      String report = "";
+void outputTrainingResult(bool successful, double finalError, 
+                         int totalIterations)
+{
+   printf("Training completed ");
 
-      if (this.iteration >= this.maxIterations)
+   if (successful)
+   {
+      printf(ANSI_GREEN_TEXT "successfully" ANSI_CLEAR_TEXT ".\n");
+      printf("Reached error %0.4f ≤ %0.4f after " ANSI_BOLD "%d" 
+            ANSI_CLEAR " iterations.\n",
+            finalError, maxAcceptableError, 
+            totalIterations);
+   }
+   else
+   {
+      printf(ANSI_RED_TEXT "unsucessfully" ANSI_CLEAR_TEXT ".\n");
+      printf("Went through %d iterations and achieved error "
+            "%0.4f > %0.4f.\n", 
+            maxIterations, finalError, maxAcceptableError);
+   }
+   return;
+} // void outputTrainingResult()
+
+
+/**
+ * Calls the train function, times it, and outputs the data collected by calling
+ * the outputTrainingResult function.
+ */
+int callTrain()
+{
+   double finalError;
+   int totalIterations;
+
+   double initialTime = (double)clock();
+
+   int returnValue = train(&finalError, &totalIterations);
+   
+   trainDuration = ((double)clock() - initialTime) / NUMBER_OF_MILLISECONDS_IN_A_SECOND;
+   
+   outputTrainingResult(returnValue == 0, finalError, totalIterations);
+
+   return returnValue;
+} // int callTrain()
+
+/**
+ * Outputs the time, in seconds, which execution of training and
+ * running took place, if applicable
+ */
+void printTimingInformation()
+{
+   if (training)
+   {
+      printf("Training took %0.3f seconds.\n", trainDuration);
+   }
+
+   if (training | runningTestCases)
+   {
+      printf("Running test cases took %0.3f seconds.\n", runDuration);
+   }
+
+   return;
+} // void printTimingInformation()
+
+/**
+ * Outputs a variety of information about the network's current state,
+ * including user input values and the value of the a, h, and F arrays 
+ * when it was last set, as well as the current weights.
+ */
+void printNetworkInfo()
+{
+   int n;
+
+   printf("WEIGHTS\n");
+   
+   for (int n = 0; n < activationLayers - 1; n++)
+   {
+      if (n != 0)
       {
-         report += ("max iterations reached; iterations: " + this.iteration + "\n");
+         printf("--------\n");
+      }
+
+      for (int k = 0; k < lengths[n]; k++)
+      {
+         for (int j = 0; j < lengths[n + 1]; j++)
+         {
+            printf("%0.4f\t", weights[n][k][j]);
+         }
+         printf("\n");
+      }
+   } // for (int n = 0; n < activationLayers - 1; n++)
+
+   printf("\n");
+
+   for (int n = 0; n < activationLayers; n++)
+   {
+      printf("\nACTIVATION STATES %d\n", n);
+
+      for (int k = 0; k < lengths[n]; k++)
+      {
+         printf("%0.4f\t", a[n][k]);
+      }
+
+   }
+
+   if (training)
+   {
+      for (int n = INITIAL_THETA_INDEX; n < THETA_ARRAY_LIMIT; n++)
+      {
+         printf("\nΘ VALUES %d\n", n);
+         for (int k = 0; k < lengths[n]; k++)
+         {
+            printf("%0.4f\t", Θ[n][k]);
+         }
+      }
+   } // if (training)
+   printf("\n");
+
+
+   return;
+} // void printNetworkInfo()
+
+/**
+ * Echoes the state of the weights arrays in a file specified by the 
+ * user-configurable variable saveFileName. It also adds a 
+ * human-readable header and the network configuration.
+ */
+int saveWeights()
+{
+   int returnValue = 0;
+
+   FILE* file;
+   file = fopen(saveFileName, "wb");
+   if (file == NULL)
+   {
+      printf(ERROR("Could not open file with name \"%s\"."), saveFileName);
+      returnValue = -1;
+   }
+   else
+   {
+      char* header = malloc(HEADER_STRING_LENGTH);
+      int result = snprintf(header, HEADER_STRING_LENGTH, "weight file %s\n", networkConfiguration);
+
+      if (result > HEADER_STRING_LENGTH || result == -1)
+      {
+         printf(ERROR("Header could not be fully written due to the "
+               "buffer's being too small."));
+         returnValue = -1;
+         free(header);
       }
       else
       {
-         report += this.iteration + " iterations reached\n";
-      }
+         bool incompleteFileWriting = false;
 
-      if (this.averageError > this.errorThreshold)
-      {
-         report += ("training failed; error is: " + this.averageError + "\n");
-      }
-      else
-      {
-         report += ("training successful; error is: " + this.averageError + "\n");
-      }
+         incompleteFileWriting |= 
+            fwrite(header, strlen(header), 1, file) < 1;
+         free(header);
 
-      report += ("training took " + this.trainTime + " milliseconds\n");
 
-      return report;
-   } // private String reportResults()
-
-/**
- * forward pass on the neural network for running
- * dots the data in the activation layers and the weights arrays
- * @precondition activation layers and weights initialized
- * @postcondition hidden layers populated, output value set
- */
-   private void runForRun()
-   {
-      for (int n = 1; n < numActivationLayers; n++)
-      {
-         for (int j = 0; j < activationCounts[n]; j++)
+         char newLine = '\n'; // defines the network config in the file
+         
+         for (int n = 0; n < activationLayers; n++)
          {
-            double theta = 0.0;
-            for (int k = 0; k < activationCounts[n-1]; k++)
-            {
-               theta += a[n-1][k] * weights[n-1][k][j];
-            } // for (int k = 0; k < activationCounts[n-1]; k++)
-            a[n][j] = activationFn(theta);
-         } // for (int j = 0; j < activationCounts[n]; j++)
-      } // for (int n = 1; n < numActivationLayers; n++)
-   } // private void runForRun()
-
-/**
- * forward pass on the neural network for training
- * dots the data in the activation layers and the weights arrays
- * @precondition activation layers and weights initialized
- * @postcondition hidden layers populated, output value set
- * @param testcase which testcase in the activation
- * @return error for the training cycle
- */
-   private double runForTrain(int testcase)
-   {
-      double error = 0.0;
-
-/*
- * number of activation layers minus one is the output layer
- * minus another one is the final hidden layer
- */
-
-      for (int n = 1; n <= finalHiddenLayerIndex; n++)
-      {
-         for (int j = 0; j < activationCounts[n]; j++)
-         {
-            double thetaNJ = 0.0;
-            for (int k = 0; k < activationCounts[n-1]; k++)
-            {
-               thetaNJ += a[n-1][k] * weights[n-1][k][j];
-            } // for (int k = 0; k < activationCounts[n-1]; k++)
-            a[n][j] = activationFn(thetaNJ);
-            theta[n][j] = thetaNJ;
-         } // for (int j = 0; j < activationCounts[n]; j++)
-      } // for (int n = 1; n <= finalHiddenLayerIndex; n++)
-
-      int n = outputLayerIndex;
-      for (int i = 0; i < activationCounts[n]; i++)
-      {
-         double thetai = 0.0;
-         for (int j = 0; j < activationCounts[n-1]; j++)
-         {
-            thetai += a[n-1][j] * weights[n-1][j][i];
+            incompleteFileWriting |=
+               fwrite(&lengths[n], sizeof(int), 1, file)  < 1;
+            incompleteFileWriting |=
+               fwrite(&newLine, sizeof(char), 1, file) < 1;
          }
-         a[n][i] = activationFn(thetai);
 
-         double omegai = truthTable[testcase][i] - a[n][i];
-         psi[n][i] = omegai * dActivationFn(thetai);
-         error += (omegai * omegai);
-      } // for (int i = 0; i < activationCounts[n]; i++)
 
-      return error;
-   } // private double runForTrain(int testcase)
-
-/**
- * runs neural net on set weight values for all test cases
- * gets calculated values for each test case
- */
-   public void run()
-   {
-      for (int tc = 0; tc < numTestCases; tc++)
-      {
-         loadActivation(testCases[tc]);
-         runForRun();
-
-         int n = outputLayerIndex;
-         for (int i = 0; i < activationCounts[n]; i++)
+         for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
          {
-            runResult[tc][i] = a[n][i];
-         }
-      } // for (int tc = 0; tc < numTestCases; tc++)
-   } // public void run()
-
-/**
- * report results
- */
-   public void reportRun()
-   {
-      int n;
-
-      System.out.print("inputs\t\t| outputs\t\t");
-
-      if (training)
-      {
-         System.out.print("| truth table");
-      }
-      System.out.println("\n------------------------------");
-
-      for (int tc = 0; tc < numTestCases; tc++)
-      {
-         n = INPUT;
-         if (printTestCases)
-         {
-            for (int i = 0; i < activationCounts[n]; i++)
+            for (int k = 0; k < lengths[n]; k++) // actual data
             {
-               System.out.print(testCases[tc][i] + "  ");
+               incompleteFileWriting |=
+                  fwrite(weights[n][k], sizeof(double), lengths[n + 1], 
+                        file) < lengths[n + 1];
+               incompleteFileWriting |=
+                  fwrite(&newLine, sizeof(char), 1, file) < 1;
             }
          }
+         int n;
 
-         System.out.print("\t| ");
-
-         n = outputLayerIndex;
-         for (int i = 0; i < activationCounts[n]; i++)
+         if (fclose(file) != 0)
          {
-            System.out.printf("%.2f ", runResult[tc][i]);
+            printf(ERROR("could not close save file"));
+            returnValue = -1;
          }
-         System.out.print("\t\t");
 
-         if (training)
+         if (incompleteFileWriting)
          {
-            System.out.print("| ");
-
-            n = outputLayerIndex;
-            for (int i = 0; i < activationCounts[n]; i++)
-            {
-               System.out.printf("%.2f ", truthTable[tc][i]);
-            }
-         } // if (training)
-
-         System.out.println();
-      } // for (int tc = 0; tc < numTestCases; tc++)
-
-      System.out.println("------------------------------");
-      System.out.print("running took " + runTime + " milliseconds\n");
-   } // public void run()
+            printf(ERROR("Could not fully write save file"));
+            returnValue = -1;
+         }
+      } // else [if result > HEADER_STRING_LENGTH || result == -1)   
+   } // else [if(file == NULL)]
+   
+   fclose(file);
+   return returnValue;
+} // int saveWeights()
 
 /**
- * attempts to save the node parameters and weights into a binary file
- * @param filename output file
- * @postcondition saves the weights or throws IOException
- * @return whether or not error occured
+ * Frees all memory allocated in the allocateMemory() function
  */
-   private boolean saveWeights(String filename)
+void freeMemory()
+{
+   for (int it = 0; it < activationLayers; it++)
    {
-      boolean erred = false;
+      free(a[it]);
+   }
+   free(a);
 
-      try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(filename)))
+   for (int it = 0; it < testCaseLength; it++)
+   {
+      free(testCases[it]);
+   }
+   free(testCases);
+
+   for (int n = 0; n < NUM_LAYER_INTERVALS; n++)
+   {
+      for (int k = 0; k < lengths[n]; k++)
       {
-         for (int layer = 0; layer < numActivationLayers; layer++)
-         {
-            dos.writeInt(activationCounts[layer]);
-         }
-
-         for (int n = 0; n < numActivationLayers - 1; n++)
-         {
-            for (int K = 0; K < activationCounts[n]; K++)
-            {
-               for (int j = 0; j < activationCounts[n + 1]; j++)
-               {
-                  dos.writeDouble(weights[n][K][j]);
-               }
-            }
-         } // for (int n = 0; n < numActivationLayers; n++)
-
-         System.out.println("saved weights");
-      } // try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(filename)))
-      catch (IOException e)
-      {
-         System.err.printf("error saving weights: %s\n", e.getMessage());
-         erred = true;
+         free(weights[n][k]);
       }
+      free(weights[n]);
+   }
+   
 
-      return erred;
-   } // private void saveWeights(String filename)
-
-/**
- * attempts to load a binary file of node and weight information
- * @param filename input file
- * @postcondition loads the weights into memory or throws IOEcception
- * @return whether error occured
- */
-   private boolean loadWeights(String filename)
+   if (training || printTruthTable)
    {
-      boolean erred = false;
-      File file = new File(filename);
-
-      if (!file.exists())
+      for (int k = 0; k < lengths[OUTPUT_LAYER_INDEX]; k++)
       {
-         System.err.printf("file %s does not exist\n", filename);
-         erred = true;
+         free(truthTable[k]);
       }
-      else
-      {
-         try (DataInputStream dis = new DataInputStream(new FileInputStream(file)))
-         {
-            for (int layer = 0; layer < numActivationLayers; layer++)
-            {
-               if (activationCounts[layer] != dis.readInt())
-               {
-                  System.err.printf("file's network format does not match config\n");
-                  erred = true;
-               }
-            }
-
-            if (!erred)
-            {
-               for (int n = 0; n < numActivationLayers - 1; n++)
-               {
-                  for (int k = 0; k < activationCounts[n]; k++)
-                  {
-                     for (int j = 0; j < activationCounts[n + 1]; j++)
-                     {
-                        weights[n][k][j] = dis.readDouble();
-                     }
-                  }
-               } // for (int n = 0; n < numActivationLayers; n++)
-            } // if (!erred)
-            System.out.println("weights loaded");
-
-         } // try (DataInputStream dis = new DataInputStream(new FileInputStream(file)))
-         catch (IOException e)
-         {
-            System.err.printf("error loading weights: %s\n", e.getMessage());
-            erred = true;
-         }
-      } // else
-      return erred;
-   } // private void loadWeights(String filename)
-
-/**
- * sigmoid function
- * @param x (-inf, inf)
- * @return sigmoid of x
- */
-   private double sigmoid(double x)
-   {
-      return 1.0 / (1.0 + Math.exp(-x));
+      free(truthTable);
    }
 
-/**
- * derivative of sigmoid function
- * @param x (-inf, inf)
- * @return d sigmoid(x) / dx
- */
-   private double dSigmoid(double x)
+   if (training)
    {
-      double sig = sigmoid(x);
-      return sig * (1.0 - sig);
-   } // private double dActivationFn(double x)
-
-/**
- * hyperbolic tangent function
- * @param x (-inf, inf)
- * @return tanh of x
- */
-   private double tanh(double x)
-   {
-      double epsilon = (x < 0.0) ? 1.0 : -1.0;
-      double e = Math.exp(epsilon * 2.0 * x);
-
-      double hyptan = epsilon * ((e - 1.0) / (e + 1.0));
-
-      return hyptan;
-   } // private double tanh(double x)
-
-/**
- * derivative of hyperbolic tangent function
- * @param x (-inf, inf)
- * @return d tanh(x) / dx
- */
-   private double dtanh(double x)
-   {
-      double hyptan = tanh(x);
-
-      return 1.0 - (hyptan * hyptan);
-   } // private double dtanh(double x)
-
-/**
- * activation function to transform the
- * activation state of the network's nodes
- *
- * @param x (-inf, inf)
- * @return the transformed input by the activation function
- */
-   private double activationFn(double x)
-   {
-      return sigmoid(x);
-   }
-
-/**
- * derivative of the activation function to transform the
- * activation state of the network's nodes
- *
- * @param x (-inf, inf)
- * @return the transformed input by the
- *         derivative of the activation function
- */
-   private double dActivationFn(double x)
-   {
-      return dSigmoid(x);
-   }
-
-/**
- * operational mode switch
- */
-   public void execute()
-   {
-      boolean erred = false;
-
-      if (loading)
+      for (int n = INITIAL_THETA_INDEX; n < THETA_ARRAY_LIMIT; n++)
       {
-         System.out.printf("LOADING WEIGHTS FROM %s\n", fileIn);
-         erred = loadWeights(fileIn);
+         free(Θ[n]);
       }
 
-      if (training)
+      free(trueΘ);
+
+      for (int n = INITIAL_PSI_INDEX; n < PSI_ARRAY_LIMIT; n++)
       {
-         trainTime = System.nanoTime();
-
-         System.out.print("TRAINING MODE\n");
-         train();
-
-         trainTime = System.nanoTime() - trainTime;
-         trainTime /= NANO_TO_MILLI;
-
-         System.out.println(reportResults());
-      } // if (training)
-
-      if (running)
-      {
-         System.out.print("RUNNING MODE\n");
-
-         if (!erred)
-         {
-            runTime = System.nanoTime();
-
-            run();
-
-            runTime = System.nanoTime() - runTime;
-            runTime /= NANO_TO_MILLI;
-
-            reportRun();
-         } // if (!erred)
-      } // if (running)
-
-      if (saving)
-      {
-         System.out.printf("SAVING WEIGHTS INTO %s\n", fileOut);
-         saveWeights(fileOut);
-      }
-   } // public void execute(boolean training)
-
-/**
- * main executable
- * @param args config file string as first parameter
- */
-   public static void main(String[] args)
-   {
-      NLayerNetwork m = new NLayerNetwork();
-
-      if (args.length == 0)
-      {
-         args = new String[1];
-         args[CONFIG_ARGUMENT_INDEX] = "training.txt";
+         free(Ψ[n]);
       }
 
-      m.init(args);
-      m.execute();
-   } // public static void main(String[] args)
-} // public class NLayerNetwork
+      free(trueΨ);
+   } // if (training)
+ 
+
+   printf(ANSI_PROJECT_COLOR
+         "Exit routine completed successfully.\n"
+         ANSI_CLEAR_TEXT);
+
+   return;
+} // void freeMemory()

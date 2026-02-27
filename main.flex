@@ -35,7 +35,10 @@ import java.io.IOException;
  *     statements.
  * 14. For loops should have a space after "for", should have spaces 
  *     after the semicolons (if succeeded by a statement), and should 
- *     have spaces around "=", "<", etc.
+ *     have spaces around "=", "<", etc. If, while, and switch 
+ *     statements should similarly have spaces between the keyword and
+ *     the open parenthes. Functions/methods should not have spaces
+ *     beteween the name and the open parenthesis.
  * 15. if (...) ...;
  *     else ... is invalid.
  * 16. Break statements are only valid if they break out of a switch
@@ -142,6 +145,8 @@ ID = (([A-Za-z_][A-Za-z0-9_]*)|(\#define)) // identifier
 EM = (({WS}*(\/\*.*\*\/)?)*(\/\/.*)?{LT}) // empty line
 FN = ((({ID}{WS}+)?{ID}{WS}+)?{ID}{WS}+{ID}{WS}*\(([^{)]*{LT})*[^{)]*\){LT}{WS}*\{) // function
 CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|interface){WS}+[A-Za-z0-9]+ // class
+
+
 
 /*
 
