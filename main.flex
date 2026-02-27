@@ -524,7 +524,7 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
     System.out.printf("11: %s\n", yytext());
     String text = yytext();
     String[] lines = text.split("\\r\\n|\\n");
-    yypushback(1);
+    //yypushback(1);
     return new Token("Superfluous new line before brace", yyline + 1,
         true);
     }
