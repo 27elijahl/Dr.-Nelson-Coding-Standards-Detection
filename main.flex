@@ -411,23 +411,30 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
 
 // ignore variables in comments
 <PASS5> (\/\*)~(\*\/) {
+    System.out.printf("1: %s\n", yytext());
     String length = yytext();
     String[] lines = length.split("\\r\\n|\\n");
     yypushback(Math.min(lines[lines.length-1].length() + 2, yylength() - 1));
     }
 
-<PASS5> \/\/.*$ {}
+<PASS5> \/\/.*$ {
+    System.out.printf("2: %s\n", yytext());
+}
 
 // ignore variables in strings
-<PASS5> \"([^\"]|(\\\"))*\" {}
+<PASS5> \"([^\"]|(\\\"))*\" {
+    System.out.printf("3: %s\n", yytext());
+}
 
 <PASS5> ^{WS}*if{WS}*\([^)]*\).*;{WS}*(\/\/.*)?{LT}{WS}*else  {
+    System.out.printf("4: %s\n", yytext());
     return new Token("If/else statement is formatted in an improper"
         + " way", yyline + 1, true);
     }
 
 // for loop
 <PASS5>^{WS}*for{WS}*\(.*;.*;.*\){WS}*$ {
+    System.out.printf("5: %s\n", yytext());
     String token = "[A-Za-z0-9_]+";
     String operator = "(>|<|>=|<=|==)";
     String text = yytext();
@@ -466,6 +473,7 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
 
 // if/while/switch construct
 <PASS5> ^{WS}*(if|while|switch){WS}*\(  {
+    System.out.printf("6: %s\n", yytext());
     String text = yytext();
     if (!text.matches("[ \\t\\f]*(if|while|switch) \\("))
     {
@@ -475,12 +483,14 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
 
 // line before a for/while/if/switch statement
 <PASS5> ^.*[^ \t\f\{\n\r].*{LT}/{WS}*(for|while|if|switch).*{LT}{WS}*\{ {
+    System.out.printf("7: %s\n", yytext());
     return new Token("Missing whitespace unless this line is the "
         + "initializer for an accumulator variable", yyline + 1, false);
     }
 
 // line after the end of a brace block
 <PASS5> \}{EM}.*$ {
+    System.out.printf("8: %s\n", yytext());
     //System.out.printf("%d - end brace met\n", yyline + 1);
     String text = yytext();
     String[] lines = text.split("\\r\\n|\\n");
@@ -497,18 +507,21 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
 
 // white space before an open brace
 <PASS5> ^({EM}{WS}*)/\{ {
+    System.out.printf("9: %s\n", yytext());
     return new Token("Likely superfluous new line before brace",
         yyline + 1, false);
     }
 
 // white space after an open brace
 <PASS5> ^{WS}*\{{EM}{EM} {
+    System.out.printf("10: %s\n", yytext());
     return new Token("Superfluous new line after brace", yyline + 2,
         true);
     }
 
 // white space before a close brace
 <PASS5> ^{EM}/{WS}*\} {
+    System.out.printf("11: %s\n", yytext());
     String text = yytext();
     String[] lines = text.split("\\r\\n|\\n");
     yypushback(1);
@@ -518,6 +531,7 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
 
 // class/interface definitions
 <PASS5> ^.*{LT}{CL}   {
+    System.out.printf("12: %s\n", yytext());
     isJava = true;
     System.out.println("Class met");
     String text = yytext();
@@ -539,6 +553,7 @@ CL = (public|private){WS}+(abstract{WS}+)?(static{WS}+)?(final{WS}+)?(class|inte
 
 // variable definitions (or close enough)
 <PASS5> ^{WS}*(for{WS}+\()?((({ID}{WS}+)?{ID}{WS}+)?{ID}{WS}+)?{ID}{WS}+{ID}(;|{WS}+=) {
+    System.out.printf("13: %s\n", yytext());
     String text = yytext();
     //System.out.println(text);
     String[] parts = text.split("[ \\t\\f\\(=;]+");
